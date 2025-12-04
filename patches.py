@@ -1,5 +1,6 @@
 import numpy as np
 
+# base on section 3.2.1 of the paper
 def extract_patches(sequence, window_size=11, stride=1):
     """
     將時間序列轉換為 Patch 矩陣。
