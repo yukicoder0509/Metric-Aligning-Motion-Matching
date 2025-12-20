@@ -1,38 +1,21 @@
-import synthetic_data
+import control_sequence
+import bvh_processing
 import patches
+import solver
 import distance
-import matplotlib.pyplot as plt
 
-# get synthetic data for testing
-X, Y = synthetic_data.generate_synthetic_data()
+X = bvh_processing.parse_bvh_to_mamm_format("./original_motion/Hip Hop Dancing.bvh")
+# Y = control_sequence.sin_wave_control_sequence(length=X.shape[0], amplitude=1.0, frequency=0.1)
+Y = control_sequence.sketch_control_sequence()
 
-# extract patches: section 3.2.1 of the paper
-X_patches = patches.extract_patches(X, window_size=11, stride=1)
-print(f"Extracted Patches shape: {X_patches.shape}") # 預期 (90, 33)
+# X_patches = patches.extract_patches(X, window_size=11, stride=1)
+# Y_patches = patches.extract_patches(Y, window_size=11, stride=1)
+# D_X = distance.compute_normalized_distance(X_patches)
+# D_Y = distance.compute_normalized_distance(Y_patches)
 
-Y_patches = patches.extract_patches(Y, window_size=11, stride=1)
-print(f"Extracted Patches shape: {Y_patches.shape}") # 預期 (110, 11)
+# X_prime = solver.solve_fsugw(D_X, D_Y, X_patches, X_prime_patches=None, alpha=0.5, rho=100.0, epsilon=0.01, num_iters=20)
+# X_aligned = solver.blend_patches(X_prime, X_patches, window_size=11, stride=1)
 
-# prepare for distance calculation section 3.2.3 of the paper
-# pre compute pairwise distance matrices
-D_X = distance.compute_normalized_distance(X_patches)
-print(f"X Pairwise Distances shape: {D_X.shape}") # 預期 (90, 90)
+X_aligned = solver.coarse_to_fine(X, Y)
 
-D_Y = distance.compute_normalized_distance(Y_patches)
-print(f"Y Pairwise Distances shape: {D_Y.shape}") # 預期 (110, 110)
-
-# visualize the distance matrices for verification
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    
-ax1 = axes[0]
-im1 = ax1.imshow(D_X, cmap='viridis')
-ax1.set_title(f"Original Motion Distance Matrix ($D_X$)\nSize: {D_X.shape}")
-plt.colorbar(im1, ax=ax1)
-
-ax2 = axes[1]
-im2 = ax2.imshow(D_Y, cmap='viridis')
-ax2.set_title(f"Control Signal Distance Matrix ($D_Y$)\nSize: {D_Y.shape}")
-plt.colorbar(im2, ax=ax2)
-
-plt.tight_layout()
-plt.show()
+bvh_processing.save_mamm_format_to_bvh(X_aligned, reference_bvh_path="./original_motion/Hip Hop Dancing.bvh", output_bvh_path="./output/Hip_Hop_Dancing_Aligned.bvh")

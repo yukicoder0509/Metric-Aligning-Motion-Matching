@@ -1,29 +1,34 @@
 import numpy as np
 from scipy.spatial.distance import cdist
+from scipy.ndimage import zoom
+from patches import extract_patches
+from distance import compute_normalized_distance
 
-def compute_wasserstein_cost(Y_patches, X_patches):
+def compute_wasserstein_cost(X_patches, X_prime_patches):
     """
-    計算兩個 Patch 集合之間的 Cross-Domain Distance Matrix (Cost Matrix)。
+    計算兩個 Patch 集合之間的 Distance Matrix (Cost Matrix)。
     這是 L_W (Wasserstein Loss) 的基礎。
-    
-    Args:
-        Y_patches: (N_y, Dim) - 控制序列的 patches (或當前生成的 patches)
-        X_patches: (N_x, Dim) - 原始動作的 patches
-        
-    Returns:
-        C_XY: (N_y, N_x) - 歐幾里得距離平方矩陣
     """
     # 使用 cdist 計算兩組點之間的距離
     # metric='sqeuclidean' 表示歐幾里得距離的平方，這是 OT 的標準 Cost 定義
-    C_XY = cdist(Y_patches, X_patches, metric='sqeuclidean')
+    C_linear = cdist(X_patches, X_prime_patches, metric='sqeuclidean')
     
     # 正規化 Cost (這在數值穩定性上很重要)
-    if C_XY.max() > 0:
-        C_XY /= C_XY.max()
+    if C_linear.max() > 0:
+        C_linear /= C_linear.max()
         
-    return C_XY
+    return C_linear
 
-def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None, 
+def compute_gw_gradient(D_Y, D_X, T):
+    """
+    計算 Gromov-Wasserstein Loss 的梯度。
+    這是基於當前的 Transport Plan T 計算的。
+    """
+    # 計算梯度: grad_GW = D_Y * T * D_X^T
+    grad_GW = np.dot(D_Y, np.dot(T, D_X.T))
+    return grad_GW
+
+def solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, 
                 alpha=0.5, rho=1.0, epsilon=0.01, num_iters=50):
     """
     求解 Fused Semi-Unbalanced Gromov-Wasserstein (FSUGW) 問題。
@@ -35,7 +40,6 @@ def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None,
         D_X: (N_x, N_x) - 原始動作的內部距離矩陣
         D_Y: (N_y, N_y) - 控制序列的內部距離矩陣
         X_patches: (N_x, Dim) - 原始動作數據
-        Y_patches: (N_y, Dim) - 目標/控制動作數據
         T_init: (N_y, N_x) - 初始傳輸計畫 (可選)
         alpha: (float) 0~1, 平衡 GW loss 和 Wasserstein loss。
                alpha 越大越重視結構對齊，越小越重視內容對齊。
@@ -57,15 +61,14 @@ def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None,
     # b 也是均勻分佈 (1/Lx)
     nu = np.ones(N_x) / N_x 
     
-    # 初始化 T
-    if T_init is None:
-        # 初始化為外積 (Product of marginals)
-        T = np.outer(mu, nu)
-    else:
-        T = T_init
+    # 初始化 T 為外積 (Product of marginals)
+    T = np.outer(mu, nu)
 
-    # 計算 Wasserstein Cost (L_W 的基礎) - 這部分在迴圈內通常是不變的(除非 Y_patches 變了)
-    C_XY = compute_wasserstein_cost(Y_patches, X_patches)
+    # 計算 Wasserstein Cost (L_W 的基礎) - 這部分在迴圈內通常是不變的
+    if X_prime_patches is None:
+        C_W = np.zeros((N_y, N_x))
+    else:
+        C_W = compute_wasserstein_cost(X_prime_patches, X_patches)
 
     # Sinkhorn 迭代迴圈
     # 這裡我們使用簡易版的 Gradient Descent + Sinkhorn Projection 策略
@@ -75,18 +78,11 @@ def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None,
         # --- A. 計算 Gradient (基於當前的 T) ---
         # GW Loss 的梯度近似為: D_Y * T * D_X^T (這是一個 tensor product 操作)
         # 這裡計算的是 "Local Cost"
-        grad_GW = np.dot(D_Y, np.dot(T, D_X.T))
-        
-        # 由於我們是最小化 -<D_Y, T*D_X*T^t> (這是 GW 的內積形式)，
-        # 我們將其轉換為 Cost 形式。
-        # 簡單理解：如果 Y 的結構 D_Y 和 X 的結構 D_X 透過 T 對齊得好，這個值會大。
-        # 因為 Sinkhorn 吃的是 "Cost" (越小越好)，所以我們取負號，或者使用 (D_Y - T D_X)^2 的展開式
-        # 這裡使用標準的 GW 梯度形式: Cost_GW = -2 * D_Y * T * D_X
-        C_GW = -2 * np.dot(D_Y, np.dot(T, D_X))
+        C_GW = compute_gw_gradient(D_Y, D_X, T)
         
         # 總 Cost 矩陣 M
         # M = alpha * Cost_GW + (1 - alpha) * Cost_Wasserstein
-        M = alpha * C_GW + (1 - alpha) * C_XY
+        M = alpha * C_GW + (1 - alpha) * C_W
         
         # --- B. Sinkhorn 投影 (解決熵正規化問題) ---
         # Kernel K = exp(-M / epsilon)
@@ -126,6 +122,71 @@ def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None,
         T = np.diag(u) @ K @ np.diag(v)
         
     return T
+
+def upsample_motion(motion, target_length):
+    """
+    將動作序列 (Time, Dim) 放大到 target_length。
+    用於將 Coarse 層級的結果作為 Fine 層級的初始值。
+    """
+    current_length = motion.shape[0]
+    zoom_factor = target_length / current_length
+    # zoom(input, zoom_factors, order=1(linear))
+    # 我們只在時間軸 (axis 0) 放縮，特徵軸 (axis 1) 保持 1.0
+    return zoom(motion, (zoom_factor, 1.0), order=1)
+
+def downsample_motion(motion, scale_factor):
+    """
+    將動作序列 (Time, Dim) 依 scale_factor 下採樣。
+    用於將 Fine 層級的動作降至 Coarse 層級。
+    """
+    return motion[::scale_factor]
+
+def coarse_to_fine(X, Y, alpha=0.5, rho=1.0, epsilon=0.01, num_stage=6, num_iters=20):
+    """
+    solve FSUGW using a coarse-to-fine strategy.
+    """
+
+    X_prime = None
+
+    for k in range(num_stage):
+        print(f"--- Stage {k+1}/{num_stage} ---")
+        
+        # downsample X, Y to current scale
+        scale_factor = 2 ** (num_stage - k - 1)
+        
+        if X.shape[0] // scale_factor < 11 or Y.shape[0] // scale_factor < 11:
+            # size after downsampling is too small (< patch window_size) for patch extraction
+            print("Skipping this stage due to small size after downsampling.")
+            continue
+        X_k = downsample_motion(X, scale_factor)
+        Y_k = downsample_motion(Y, scale_factor)
+
+        if X_prime is None:
+            # initialize X_prime
+            # paper did not specify how to initialize X_prime at the coarsest level
+            # so we scale X to the length of Y as the initial X_prime.
+            # To let the length of X_prime match Y, we upsample X to the current resolution. This is a bit different to the paper
+            X_prime = upsample_motion(X, Y_k.shape[0])
+        else: 
+            X_prime = upsample_motion(X_prime, Y_k.shape[0])
+
+        for m in range(num_iters):
+            # extract patches
+            X_patches = extract_patches(X_k, window_size=11, stride=1)
+            Y_patches = extract_patches(Y_k, window_size=11, stride=1)
+            X_prime_patches = extract_patches(X_prime, window_size=11, stride=1)
+
+            # compute distance matrices
+            D_X = compute_normalized_distance(X_patches)
+            D_Y = compute_normalized_distance(Y_patches)
+
+            # solve FSUGW
+            T = solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, alpha, rho, epsilon, num_iters=10)
+
+            # blend patches to get new X_prime
+            X_prime = blend_patches(T, X_patches, window_size=11, stride=1)
+
+    return X_prime
 
 def blend_patches(T, X_patches, window_size=11, stride=1):
     """
