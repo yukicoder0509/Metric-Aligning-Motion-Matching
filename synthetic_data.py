@@ -16,10 +16,95 @@ def generate_synthetic_data():
     # 使用 1D 波形控制。假設我們希望動作變慢或變快。
     # 形狀: (Frames, Features). 這裡 Features = 1 (振幅)
     # 產生一個不同頻率的波形
-    t_y = np.linspace(0, 8 * np.pi, 120) # 120 幀 (長度可以跟 X 不同)
+    t_y = np.linspace(0, 16 * np.pi, 120) # 120 幀 (長度可以跟 X 不同)
     Y = np.sin(t_y).reshape(-1, 1)
     
     return X, Y
+
+def motion_playback_3d(X, title="3D Motion"):
+    """
+    Play 3D motion animation for X data
+    Args:
+        X: (frames, 3) - 3D motion data with x, y, z coordinates
+        title: str - Title for the animation
+    """
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_title(title, fontsize=14)
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.5, 1.5)
+    ax.set_zlim(-1.5, 1.5)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    # Initialize objects
+    trail, = ax.plot([], [], [], lw=2, color='blue', alpha=0.7)
+    point, = ax.plot([], [], [], 'ro', markersize=10)
+    
+    def update(frame):
+        # Current position
+        x, y, z = X[frame]
+        point.set_data([x], [y])
+        point.set_3d_properties([z])
+        
+        # Trail (past positions)
+        trail.set_data(X[:frame+1, 0], X[:frame+1, 1])
+        trail.set_3d_properties(X[:frame+1, 2])
+        
+        return point, trail
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(X), interval=100, blit=False, repeat=True
+    )
+    
+    plt.tight_layout()
+    plt.show()
+    return ani
+
+def motion_playback_1d(Y, title="Control Signal"):
+    """
+    Play 1D control signal animation for Y data
+    Args:
+        Y: (frames, 1) - 1D control signal data
+        title: str - Title for the animation
+    """
+    Y_flat = Y.flatten() if Y.ndim > 1 else Y
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.set_title(title, fontsize=14)
+    ax.set_xlim(0, len(Y_flat))
+    ax.set_ylim(np.min(Y_flat) * 1.2, np.max(Y_flat) * 1.2)
+    ax.set_xlabel('Time (frames)')
+    ax.set_ylabel('Signal Value')
+    ax.grid(True, alpha=0.3)
+
+    # Plot full signal as background
+    ax.plot(Y_flat, color='lightgray', linestyle='--', alpha=0.5, label='Full Signal')
+    
+    # Initialize animated objects
+    line, = ax.plot([], [], 'b-', lw=2, label='Current Signal')
+    point, = ax.plot([], [], 'ro', markersize=8, label='Current Position')
+    
+    ax.legend()
+    
+    def update(frame):
+        # Current signal up to this frame
+        line.set_data(np.arange(frame+1), Y_flat[:frame+1])
+        
+        # Current position
+        point.set_data([frame], [Y_flat[frame]])
+        
+        return line, point
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(Y_flat), interval=100, blit=False, repeat=True
+    )
+    
+    plt.tight_layout()
+    plt.show()
+    return ani
+
 
 if __name__ == "__main__":
     # show the synthetic data with animation

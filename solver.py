@@ -126,3 +126,80 @@ def solve_fsugw(D_X, D_Y, X_patches, Y_patches, T_init=None,
         T = np.diag(u) @ K @ np.diag(v)
         
     return T
+
+def blend_patches(T, X_patches, window_size=11, stride=1):
+    """
+    根據 Transport Plan (T) 和原始動作 Patches (X_patches)，
+    合成出對齊後的動作序列 X_prime。
+    
+    對應論文 Algorithm 1: X' <- BlendPatches(T * X_tilde ...)
+    對應論文 3.2.4 (3): X' ← BlendPatches(T·X·L_Y).
+        With T fixed, update X' by matching weighted by the transport plan and blending the overlapping regions through averaging.
+    
+    Args:
+        T: (N_y, N_x) - Transport Plan (由 FSUGW 算出)
+           N_y 是控制序列(Control)的 patch 數
+           N_x 是原始動作(Original)的 patch 數
+        X_patches: (N_x, Flattened_Dim) - 原始動作的 patches
+           Flattened_Dim = window_size * feature_dim
+        window_size: (int) Patch 的時間長度 (e.g., 11)
+        stride: (int) Patch 的步長 (通常為 1)
+        
+    Returns:
+        X_prime: (L_new, feature_dim) - 最終對齊後的連續動作序列
+    """
+    
+    # --- Step 1: 加權映射 (Barycentric Projection) ---
+    # 計算每個新 Patch 是由哪些舊 Patches 組成的
+    # 公式概念: X'_patches = (T @ X_patches) / row_sums_of_T
+    
+    # 1. 加權總和
+    # (N_y, N_x) @ (N_x, Dim) -> (N_y, Dim)
+    X_prime_patches_weighted = np.dot(T, X_patches)
+    
+    # 2. 正規化 (除以權重總和)
+    # T 的每一列 (row) 代表一個 Y patch 對應到 X patches 的機率分佈
+    # 我們需要除以該列的總和來做加權平均
+    row_sums = T.sum(axis=1)[:, np.newaxis] # Shape: (N_y, 1)
+    
+    # 避免除以 0 (雖然理論上 T 不會全為 0，但為了數值穩定)
+    row_sums[row_sums < 1e-10] = 1.0
+    
+    X_prime_patches = X_prime_patches_weighted / row_sums
+    
+    # --- Step 2: 重疊平均 (Reconstruction from Patches) ---
+    # 將重疊的 Patches 拼回連續序列
+    # blending the overlapping regions through averaging.
+    
+    num_patches_y = X_prime_patches.shape[0]
+    flattened_dim = X_prime_patches.shape[1]
+    feature_dim = flattened_dim // window_size
+    
+    # 計算最終序列的總長度
+    # Length = (Strips - 1) * Stride + Window
+    final_length = (num_patches_y - 1) * stride + window_size
+    
+    # 初始化累加器和計數器
+    X_prime_accum = np.zeros((final_length, feature_dim))
+    counts = np.zeros((final_length, 1))
+    
+    for i in range(num_patches_y):
+        # 計算該 Patch 在時間軸上的起始與結束位置
+        start_frame = i * stride
+        end_frame = start_frame + window_size
+        
+        # 取出該 Patch 的數據並 Reshape 回 (Window, Features)
+        # 因為輸入時是被 Flatten 過的
+        patch_data = X_prime_patches[i].reshape(window_size, feature_dim)
+        
+        # 累加到對應的時間位置
+        X_prime_accum[start_frame:end_frame] += patch_data
+        counts[start_frame:end_frame] += 1.0
+        
+    # --- Step 3: 取平均 ---
+    # 避免除以 0 (雖然邏輯上 counts 至少為 1)
+    counts[counts == 0] = 1.0
+    
+    X_prime = X_prime_accum / counts
+    
+    return X_prime
