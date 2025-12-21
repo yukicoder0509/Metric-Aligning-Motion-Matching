@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib.pyplot as plt
+import os
 from scipy.spatial.distance import cdist
 from scipy.ndimage import zoom
 from patches import extract_patches
@@ -183,10 +185,67 @@ def coarse_to_fine(X, Y, alpha=0.5, rho=1.0, epsilon=0.01, num_stage=6, num_iter
             # solve FSUGW
             T = solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, alpha, rho, epsilon, num_iters=10)
 
+            # Save heat maps on the final iteration of the final stage
+            if k == num_stage - 1 and m == num_iters - 1:
+                save_heatmaps(D_X, D_Y, T, stage=k+1, iteration=m+1)
+
             # blend patches to get new X_prime
             X_prime = blend_patches(T, X_patches, window_size=11, stride=1)
 
     return X_prime
+
+def save_heatmaps(D_X, D_Y, T, stage, iteration):
+    """
+    Save heat maps of distance matrices D_X, D_Y and transport plan T.
+    
+    Args:
+        D_X: (N_x, N_x) - Distance matrix for original motion patches
+        D_Y: (N_y, N_y) - Distance matrix for control sequence patches  
+        T: (N_y, N_x) - Transport plan matrix
+        stage: Current stage number
+        iteration: Current iteration number
+    """
+    # Create output directory
+    output_dir = "output/heatmaps"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save matrices as numpy files
+    np.save(f"{output_dir}/D_X_stage{stage}_iter{iteration}.npy", D_X)
+    np.save(f"{output_dir}/D_Y_stage{stage}_iter{iteration}.npy", D_Y)
+    np.save(f"{output_dir}/T_stage{stage}_iter{iteration}.npy", T)
+    
+    # Create heat map visualizations
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # D_X heat map
+    im1 = axes[0].imshow(D_X, cmap='viridis', aspect='auto')
+    axes[0].set_title(f'D_X (Original Motion Distance Matrix)\nStage {stage}, Iteration {iteration}')
+    axes[0].set_xlabel('Patch Index')
+    axes[0].set_ylabel('Patch Index')
+    plt.colorbar(im1, ax=axes[0])
+    
+    # D_Y heat map
+    im2 = axes[1].imshow(D_Y, cmap='viridis', aspect='auto')
+    axes[1].set_title(f'D_Y (Control Sequence Distance Matrix)\nStage {stage}, Iteration {iteration}')
+    axes[1].set_xlabel('Patch Index')
+    axes[1].set_ylabel('Patch Index')
+    plt.colorbar(im2, ax=axes[1])
+    
+    # T heat map
+    im3 = axes[2].imshow(T, cmap='plasma', aspect='auto')
+    axes[2].set_title(f'T (Transport Plan)\nStage {stage}, Iteration {iteration}')
+    axes[2].set_xlabel('Original Motion Patches')
+    axes[2].set_ylabel('Control Sequence Patches')
+    plt.colorbar(im3, ax=axes[2])
+    
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/heatmaps_stage{stage}_iter{iteration}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Heat maps saved for stage {stage}, iteration {iteration}:")
+    print(f"  - Matrices: {output_dir}/D_X_stage{stage}_iter{iteration}.npy, D_Y_stage{stage}_iter{iteration}.npy, T_stage{stage}_iter{iteration}.npy")
+    print(f"  - Visualization: {output_dir}/heatmaps_stage{stage}_iter{iteration}.png")
+    print(f"  - D_X shape: {D_X.shape}, D_Y shape: {D_Y.shape}, T shape: {T.shape}")
 
 def blend_patches(T, X_patches, window_size=11, stride=1):
     """
