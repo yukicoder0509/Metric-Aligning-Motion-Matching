@@ -10,8 +10,8 @@ def compute_normalized_distance(patches):
     # cdist 計算 all possible pairwise distance
     D = cdist(patches, patches, metric='euclidean')
     
-    # 正規化: 論文建議除以最大值 (或平均值)
-    if D.max() > 0:
-        D = D / D.max()
+    # 正規化: 使用平均值而非最大值，對異常值更robust
+    if D.mean() > 0:
+        D = D / D.mean()
     
     return D

@@ -19,7 +19,11 @@ Y = control_sequence.sketch_control_sequence()
 # # ====
 
 #==== With Coarse-to-Fine ====
-X_aligned = solver.coarse_to_fine(X, Y)
+# Updated hyperparameters for better structural alignment:
+# alpha=0.9: Prioritize GW loss/Structure over Wasserstein
+# epsilon=1.0: Increase entropy regularization for stability
+# rho=0.1: Relax marginal constraints for Semi-Unbalanced OT
+X_aligned = solver.coarse_to_fine(X, Y, alpha=0.8, rho=0.1, epsilon=0.01)
 #====
 
 bvh_processing.save_mamm_format_to_bvh(X_aligned, reference_bvh_path="./original_motion/Hip Hop Dancing.bvh", output_bvh_path="./output/Hip_Hop_Dancing_Aligned.bvh")

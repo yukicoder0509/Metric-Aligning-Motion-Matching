@@ -23,15 +23,28 @@ def compute_wasserstein_cost(X_patches, X_prime_patches):
 
 def compute_gw_gradient(D_Y, D_X, T):
     """
-    計算 Gromov-Wasserstein Loss 的梯度。
-    這是基於當前的 Transport Plan T 計算的。
+    計算 Gromov-Wasserstein Loss 的梯度/Cost Matrix。
+    For Semi-Unbalanced OT, we need the full cost matrix M = constC + A
+    where A is the cross-term and constC contains squared distance terms.
     """
-    # 計算梯度: grad_GW = D_Y * T * D_X^T
-    grad_GW = np.dot(D_Y, np.dot(T, D_X.T))
-    return grad_GW
+    # Get marginals from current transport plan
+    mu = T.sum(axis=1)  # Row sums (source marginals)
+    nu = T.sum(axis=0)  # Col sums (target marginals)
+    
+    # Compute squared terms (constC in official implementation)
+    # These are not constant when marginals are not fixed (Semi-Unbalanced case)
+    constC = np.outer(np.diag(D_Y), nu) + np.outer(mu, np.diag(D_X))
+    
+    # Compute cross-term (A in official implementation)
+    # This is the tensor product term: -2 * D_Y @ T @ D_X^T
+    A = -2.0 * np.dot(D_Y, np.dot(T, D_X.T))
+    
+    # Full cost matrix M = constC + A
+    M = constC + A
+    return M
 
 def solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, 
-                alpha=0.8, rho=1.0, epsilon=0.01, num_iters=50):
+                alpha=0.9, rho=0.1, epsilon=0.01, num_iters=50, T_init=None):
     """
     求解 Fused Semi-Unbalanced Gromov-Wasserstein (FSUGW) 問題。
     
@@ -63,8 +76,11 @@ def solve_fsugw(D_X, D_Y, X_patches, X_prime_patches,
     # b 也是均勻分佈 (1/Lx)
     nu = np.ones(N_x) / N_x 
     
-    # 初始化 T 為外積 (Product of marginals)
-    T = np.outer(mu, nu)
+    # 初始化 T: 使用 warm start 如果提供，否則為外積 (Product of marginals)
+    if T_init is not None:
+        T = T_init.copy()
+    else:
+        T = np.outer(mu, nu)
 
     # 計算 Wasserstein Cost (L_W 的基礎) - 這部分在迴圈內通常是不變的
     if X_prime_patches is None:
@@ -77,9 +93,8 @@ def solve_fsugw(D_X, D_Y, X_patches, X_prime_patches,
     # 這是一種解 GW 問題的常見方法 (Mirror Descent)
     
     for i in range(num_iters):
-        # --- A. 計算 Gradient (基於當前的 T) ---
-        # GW Loss 的梯度近似為: D_Y * T * D_X^T (這是一個 tensor product 操作)
-        # 這裡計算的是 "Local Cost"
+        # --- A. 計算 Full Cost Matrix (基於當前的 T) ---
+        # For Semi-Unbalanced OT, we need the full gradient including squared terms
         C_GW = compute_gw_gradient(D_Y, D_X, T)
         
         # 總 Cost 矩陣 M
@@ -143,7 +158,7 @@ def downsample_motion(motion, scale_factor):
     """
     return motion[::scale_factor]
 
-def coarse_to_fine(X, Y, alpha=0.8, rho=1.0, epsilon=0.01, num_stage=6, num_iters=20):
+def coarse_to_fine(X, Y, alpha=0.9, rho=0.1, epsilon=0.01, num_stage=6, num_iters=20):
     """
     solve FSUGW using a coarse-to-fine strategy.
     Args:
@@ -157,6 +172,7 @@ def coarse_to_fine(X, Y, alpha=0.8, rho=1.0, epsilon=0.01, num_stage=6, num_iter
     """
 
     X_prime = None
+    T_prev = None  # Track transport plan for warm-starting
 
     for k in range(num_stage):
         print(f"--- Stage {k+1}/{num_stage} ---")
@@ -190,8 +206,25 @@ def coarse_to_fine(X, Y, alpha=0.8, rho=1.0, epsilon=0.01, num_stage=6, num_iter
             D_X = compute_normalized_distance(X_patches)
             D_Y = compute_normalized_distance(Y_patches)
 
-            # solve FSUGW
-            T = solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, alpha, rho, epsilon, num_iters=10)
+            # Prepare T_init for warm-starting
+            T_init = None
+            if T_prev is not None and m == 0:  # Use warm-start only for first iteration of each stage
+                # Upsample T_prev to current resolution
+                target_shape = (Y_patches.shape[0], X_patches.shape[0])
+                if T_prev.shape != target_shape:
+                    # Simple bilinear upsampling
+                    from scipy.ndimage import zoom
+                    zoom_factors = (target_shape[0] / T_prev.shape[0], target_shape[1] / T_prev.shape[1])
+                    T_init = zoom(T_prev, zoom_factors, order=1)
+                    # Renormalize to maintain transport plan properties
+                    T_init = np.maximum(T_init, 0)  # Ensure non-negative
+                    if T_init.sum() > 0:
+                        T_init = T_init / T_init.sum() * T_prev.sum()
+                else:
+                    T_init = T_prev.copy()
+
+            # solve FSUGW with warm-starting
+            T = solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, alpha, rho, epsilon, num_iters=10, T_init=T_init)
 
             # Save heat maps on the final iteration of the final stage
             if k == num_stage - 1 and m == num_iters - 1:
@@ -199,6 +232,9 @@ def coarse_to_fine(X, Y, alpha=0.8, rho=1.0, epsilon=0.01, num_stage=6, num_iter
 
             # blend patches to get new X_prime
             X_prime = blend_patches(T, X_patches, window_size=11, stride=1)
+            
+        # Store T from last iteration of this stage for next stage warm-starting
+        T_prev = T.copy()
 
     return X_prime
 
