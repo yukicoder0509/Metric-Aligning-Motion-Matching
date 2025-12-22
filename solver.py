@@ -31,7 +31,7 @@ def compute_gw_gradient(D_Y, D_X, T):
     return grad_GW
 
 def solve_fsugw(D_X, D_Y, X_patches, X_prime_patches, 
-                alpha=0.5, rho=1.0, epsilon=0.01, num_iters=50):
+                alpha=0.8, rho=1.0, epsilon=0.01, num_iters=50):
     """
     求解 Fused Semi-Unbalanced Gromov-Wasserstein (FSUGW) 問題。
     
@@ -143,9 +143,17 @@ def downsample_motion(motion, scale_factor):
     """
     return motion[::scale_factor]
 
-def coarse_to_fine(X, Y, alpha=0.5, rho=1.0, epsilon=0.01, num_stage=6, num_iters=20):
+def coarse_to_fine(X, Y, alpha=0.8, rho=1.0, epsilon=0.01, num_stage=6, num_iters=20):
     """
     solve FSUGW using a coarse-to-fine strategy.
+    Args:
+    :alpha: (float) 0~1, balance between GW loss and Wasserstein loss. alpha higher mean you care more about aliging with Y instead of the original X.
+    :rho: (float) marginal relaxation parameter.
+    :epsilon: (float) entropy regularization strength.
+    :num_stage: (int) number of coarse-to-fine stages.
+    :num_iters: (int) number of FSUGW iterations per stage.
+    Returns:
+    Aligned motion X_prime with the same length as Y.
     """
 
     X_prime = None
